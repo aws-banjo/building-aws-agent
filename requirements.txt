@@ -1,0 +1,4 @@
+requests
+langchain
+transformers
+Pillow
