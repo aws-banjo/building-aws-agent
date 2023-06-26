@@ -6,6 +6,8 @@ Tools are self-contained functions that perform a singular task that the agent c
 
 Agent AWS contains a set of tools that allows it to query AWS documentation, generating code, and creating architectural diagrams.
 
+To learn more read the blog post [here](https://www.buildon.aws/posts/building-agent-aws).
+
 ## QuickStart
 
 Here is how you can easily get started using the Agent
