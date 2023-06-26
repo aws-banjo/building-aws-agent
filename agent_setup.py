@@ -1,14 +1,9 @@
-import json
 import os
 import subprocess
-from typing import Dict
+import time
 
 import requests
-from langchain import PromptTemplate, SagemakerEndpoint
-from langchain.chains.question_answering import load_qa_chain
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.llms.sagemaker_endpoint import LLMContentHandler
-from langchain.prompts.prompt import PromptTemplate
 from langchain.vectorstores import FAISS
 from PIL import Image
 from transformers import Tool
@@ -16,6 +11,19 @@ from transformers.tools import HfAgent
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 HUGGING_FACE_KEY = os.environ["HUGGING_FACE_KEY"]
+
+try:
+    QUERY_MODEL = os.environ["QUERY_MODEL"]
+    CODE_MODEL = os.environ["CODE_MODEL"]
+    DIAGRAM_MODEL = os.environ["DIAGRAM_MODEL"]
+    BASE_MODEL = os.environ["BASE_MODEL"]
+
+except:
+    QUERY_MODEL = "tiiuae/falcon-7b-instruct"
+    CODE_MODEL = "bigcode/starcoder"
+    DIAGRAM_MODEL = "bigcode/starcoder"
+    BASE_MODEL = "bigcode/starcoderbase"
+
 
 sa_prompt = """
 You are an expert AWS Certified Solutions Architect. Your role is to help customers understand best practices on building on AWS. You will generate Python commands using available tools to help will customers solve their problem effectively.
@@ -69,52 +77,54 @@ class AWSWellArchTool(Tool):
     inputs = ["text"]
     outputs = ["text"]
 
-    def qa_chain(self):
-        prompt_template = """Use the following pieces of context to answer the question at the end.
+    def call_endpoint(self, payload):
+        headers = {"Authorization": f"Bearer {HUGGING_FACE_KEY}"}
+
+        API_URL = f"https://api-inference.huggingface.co/models/{QUERY_MODEL}"
+
+        try:
+            response = requests.post(API_URL, headers=headers, json=payload)
+        except Exception as e:
+            # just try again
+            time.sleep(5)
+            response = requests.post(API_URL, headers=headers, json=payload)
+        return response.json()
+
+    def __call__(self, query):
+        # Find docs
+        embeddings = HuggingFaceEmbeddings()
+        vectorstore = FAISS.load_local("local_index", embeddings)
+        docs = vectorstore.similarity_search(query)
+        context = ""
+
+        doc_sources_string = ""
+        for doc in docs:
+            doc_sources_string += doc.metadata["source"] + "\n"
+            context += doc.page_content
+
+        prompt = f"""Use the following pieces of context to answer the question at the end.
 
         {context}
 
-        Question: {question}
+        Question: {query}
         Answer:"""
-        PROMPT = PromptTemplate(
-            template=prompt_template, input_variables=["context", "question"]
+
+        output = self.call_endpoint(
+            {
+                "inputs": prompt,
+                "parameters": {
+                    "do_sample": False,
+                    "max_new_tokens": 500,
+                    "return_full_text": False,
+                    "temperature": 0.01,
+                },
+            }
         )
+        generated_text = output[0]["generated_text"]
+        print(generated_text)
 
-        class ContentHandler(LLMContentHandler):
-            content_type = "application/json"
-            accepts = "application/json"
-
-            def transform_input(self, prompt: str, model_kwargs: Dict) -> bytes:
-                # clean prompt
-                prompt = prompt.replace("\\n,", "").replace("\n", "").strip()
-
-                payload = {
-                    "prompt": prompt,
-                    "maxTokens": 2048,
-                    "temperature": 0.7,
-                    "numResults": 1,
-                }
-
-                payload = json.dumps(payload).encode("utf-8")
-                return payload
-
-            def transform_output(self, output: bytes) -> str:
-                response_json = json.loads(output.read().decode("utf-8"))
-                return response_json["completions"][0]["data"]["text"]
-
-        content_handler = ContentHandler()
-        # Setup chain
-        chain = load_qa_chain(
-            llm=SagemakerEndpoint(
-                endpoint_name="j2-grande-instruct",
-                region_name="us-east-1",
-                credentials_profile_name="default",
-                content_handler=content_handler,
-            ),
-            prompt=PROMPT,
-        )
-
-        return chain
+        resp_json = {"ans": str(generated_text), "docs": doc_sources_string}
+        return resp_json
 
     def __call__(self, query):
         chain = self.qa_chain()
@@ -144,7 +154,7 @@ class CodeGenerationTool(Tool):
     outputs = ["text"]
 
     def call_endpoint(self, payload):
-        API_URL = "https://api-inference.huggingface.co/models/bigcode/starcoder"
+        API_URL = f"https://api-inference.huggingface.co/models/{CODE_MODEL}"
         headers = {"Authorization": f"Bearer {HUGGING_FACE_KEY}"}
         response = requests.post(API_URL, headers=headers, json=payload)
         return response.json()
@@ -256,7 +266,7 @@ class DiagramCreationTool(Tool):
 
     def call_endpoint(self, payload):
         headers = {"Authorization": f"Bearer {HUGGING_FACE_KEY}"}
-        API_URL = "https://api-inference.huggingface.co/models/bigcode/starcoder"
+        API_URL = f"https://api-inference.huggingface.co/models/{DIAGRAM_MODEL}"
         response = requests.post(API_URL, headers=headers, json=payload)
         return response.json()
 
@@ -300,7 +310,8 @@ def start_agent(
 
     # Start Agent
     agent = HfAgent(
-        model_endpoint,
+        f"https://api-inference.huggingface.co/models/{BASE_MODEL}",
+        token=HUGGING_FACE_KEY,
         run_prompt_template=sa_prompt,
         additional_tools=[code_gen_tool, well_arch_tool, diagram_gen_tool],
     )
