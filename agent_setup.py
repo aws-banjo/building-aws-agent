@@ -22,7 +22,7 @@ except:
     QUERY_MODEL = "tiiuae/falcon-7b-instruct"
     CODE_MODEL = "bigcode/starcoder"
     DIAGRAM_MODEL = "bigcode/starcoder"
-    BASE_MODEL = "bigcode/starcoderbase"
+    BASE_MODEL = "bigcode/starcoder"
 
 
 sa_prompt = """
